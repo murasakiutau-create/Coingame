@@ -1,41 +1,71 @@
 extends Node3D
 ## ゲームのメインシーン。盤面・カメラ・ライト・UIをコードで構築し、
-## コイン投下とアイテム自動出現を管理する。
+## コイン投下とアイテム出現を管理する。
 ##
-## ※ Godotエディタが無い環境で作っているため、シーンツリーをコードで組んでいる。
-##   エディタで開けば各ノードはシーンドック上にも現れるので、後から視覚編集も可能。
+## ※ Godotエディタが無い環境で作ったため、シーンツリーをコードで組んでいる。
+##   エディタで開けば各ノードはシーンドックにも現れるので、後から視覚編集も可能。
 
 const COIN_SCRIPT := preload("res://scripts/coin.gd")
 const ITEM_SCRIPT := preload("res://scripts/item.gd")
 
-# 盤面の寸法（おおよそ）
-const DECK_TOP_Y := 0.0
-const ITEM_SPAWN_INTERVAL := 5.0   ## アイテム自動出現の間隔（秒）
-const MAX_ITEMS_ON_BOARD := 8      ## 盤面に出すアイテムの上限
+# --- 盤面・ゲームのパラメータ（手触りはここを調整） ---
+const DROP_Z := 0.3            ## コインを落とすZ位置（板に押される手前側）
+const DROP_Y := 4.0            ## コインを落とす高さ
+const DROP_X_RANGE := 2.5      ## 落下位置を左右に動かせる範囲
+const AIM_SPEED := 5.0         ## ←→キーで狙いを動かす速さ
+const COINS_PER_ITEM := 10     ## コインを何枚入れたらアイテムが1個出るか
+const MAX_ITEMS_ON_BOARD := 8  ## 盤面に出すアイテムの上限
 
-var _dynamic_root: Node3D           ## コイン/アイテムをぶら下げる親
-var _item_timer: Timer
+var _camera: Camera3D
+var _dynamic_root: Node3D       ## コイン/アイテムをぶら下げる親
+var _indicator: Node3D          ## 落下位置マーカー
+var _drop_x := 0.0              ## 現在の落下X位置
+var _coins_dropped := 0         ## これまでに投入したコイン総数
 
 func _ready() -> void:
 	_build_environment()
 	_build_stage()
 	_build_dynamic_root()
+	_build_indicator()
 	_build_ui()
-	_start_item_spawner()
+	_preplace_coins()
+
+func _process(delta: float) -> void:
+	# ←→（またはA/D）で落下位置を動かす
+	var axis := Input.get_axis("ui_left", "ui_right")
+	if axis != 0.0:
+		_drop_x = clampf(_drop_x + axis * AIM_SPEED * delta, -DROP_X_RANGE, DROP_X_RANGE)
+	if _indicator:
+		_indicator.position.x = _drop_x
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("drop_coin"):
+	if event is InputEventMouseMotion:
+		_aim_with_mouse(event.position)
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		drop_coin()
+	elif event.is_action_pressed("drop_coin"):
+		drop_coin()
+
+## マウス位置を落下高さの平面に投影して、落下X位置を決める
+func _aim_with_mouse(screen_pos: Vector2) -> void:
+	if _camera == null:
+		return
+	var origin := _camera.project_ray_origin(screen_pos)
+	var dir := _camera.project_ray_normal(screen_pos)
+	var plane := Plane(Vector3.UP, DROP_Y)
+	var hit = plane.intersects_ray(origin, dir)
+	if hit != null:
+		_drop_x = clampf(hit.x, -DROP_X_RANGE, DROP_X_RANGE)
 
 # ---------------------------------------------------------------- 環境
 
 func _build_environment() -> void:
-	var cam := Camera3D.new()
-	cam.position = Vector3(0, 7.0, 8.5)
-	cam.fov = 55
-	add_child(cam)
+	_camera = Camera3D.new()
+	_camera.position = Vector3(0, 6.5, 7.5)
+	_camera.fov = 58
+	add_child(_camera)
 	# look_at はツリーに入った後に呼ぶ（グローバル変換が必要なため）
-	cam.look_at(Vector3(0, 0, -1.0), Vector3.UP)
+	_camera.look_at(Vector3(0, 0, -1.5), Vector3.UP)
 
 	var light := DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-55, -35, 0)
@@ -56,41 +86,42 @@ func _build_environment() -> void:
 # ---------------------------------------------------------------- 盤面
 
 func _build_stage() -> void:
-	# 床（デッキ）：上面が y=0
-	_make_static_box(Vector3(6, 0.5, 7), Vector3(0, -0.25, -1.5), Color(0.25, 0.27, 0.33))
+	# 床（デッキ）：上面が y=0、奥 z=-4 〜 手前の前端 z=1.2
+	_make_static_box(Vector3(6, 0.5, 5.2), Vector3(0, -0.25, -1.4), Color(0.25, 0.27, 0.33))
+	# 奥の壁（ここで完全に塞ぐので、コインが奥へ落ちることはない）
+	_make_static_box(Vector3(6.5, 2, 0.5), Vector3(0, 0.75, -4.25), Color(0.2, 0.22, 0.28))
 	# 左右の壁
-	_make_static_box(Vector3(0.5, 2, 7), Vector3(-3.25, 0.75, -1.5), Color(0.2, 0.22, 0.28))
-	_make_static_box(Vector3(0.5, 2, 7), Vector3(3.25, 0.75, -1.5), Color(0.2, 0.22, 0.28))
-	# 奥の壁
-	_make_static_box(Vector3(6.5, 2, 0.5), Vector3(0, 0.75, -5.25), Color(0.2, 0.22, 0.28))
+	_make_static_box(Vector3(0.5, 2, 5.2), Vector3(-3.25, 0.75, -1.4), Color(0.2, 0.22, 0.28))
+	_make_static_box(Vector3(0.5, 2, 5.2), Vector3(3.25, 0.75, -1.4), Color(0.2, 0.22, 0.28))
 
-	# プッシャー板（往復）
+	# プッシャー板（往復する幅広・薄い板）。奥のコインの山ごと手前へ押し出す。
 	var pusher := AnimatableBody3D.new()
 	pusher.set_script(load("res://scripts/pusher.gd"))
-	pusher.position = Vector3(0, 0.5, -3.0)
+	pusher.position = Vector3(0, 0.3, -1.8)   # base_z はこの z から決まる
+	pusher.set("stroke", 1.4)
+	pusher.set("speed", 1.2)
 	var pmesh := MeshInstance3D.new()
 	var pbox := BoxMesh.new()
-	pbox.size = Vector3(5.6, 1.0, 1.6)
+	pbox.size = Vector3(5.6, 0.6, 1.0)         # 幅広・薄い「板」
 	pmesh.mesh = pbox
 	var pmat := StandardMaterial3D.new()
-	pmat.albedo_color = Color(0.85, 0.4, 0.3)
+	pmat.albedo_color = Color(0.85, 0.45, 0.3)
 	pmesh.material_override = pmat
 	pusher.add_child(pmesh)
 	var pcol := CollisionShape3D.new()
 	var pshape := BoxShape3D.new()
-	pshape.size = Vector3(5.6, 1.0, 1.6)
+	pshape.size = Vector3(5.6, 0.6, 1.0)
 	pcol.shape = pshape
 	pusher.add_child(pcol)
 	add_child(pusher)
 
-	# 回収エリア（手前下）：盤面の前端 z=2 から「落ちた」ものだけを受ける。
-	# デッキ上面(y=0)より十分下・前端より手前に置き、デッキ上のコインを誤回収しない。
+	# 回収エリア（手前下）：前端 z=1.2 から「落ちた」ものだけを受ける。
 	var collect := Area3D.new()
 	collect.set_script(load("res://scripts/collect_area.gd"))
-	collect.position = Vector3(0, -2.0, 4.0)
+	collect.position = Vector3(0, -2.0, 2.6)
 	var acol := CollisionShape3D.new()
 	var ashape := BoxShape3D.new()
-	ashape.size = Vector3(8, 3, 4)
+	ashape.size = Vector3(8, 3, 3)
 	acol.shape = ashape
 	collect.add_child(acol)
 	add_child(collect)
@@ -118,31 +149,68 @@ func _build_dynamic_root() -> void:
 	_dynamic_root.name = "Dynamic"
 	add_child(_dynamic_root)
 
+## 落下位置を示すマーカー（下向きの矢印っぽいコーン）
+func _build_indicator() -> void:
+	_indicator = Node3D.new()
+	_indicator.position = Vector3(0, 2.4, DROP_Z)
+	var mesh := MeshInstance3D.new()
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.0
+	cone.bottom_radius = 0.28
+	cone.height = 0.6
+	mesh.mesh = cone
+	mesh.rotation_degrees = Vector3(180, 0, 0)   # 先端を下に向ける
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.9, 0.2)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.8, 0.1)
+	mat.emission_energy_multiplier = 0.5
+	mesh.material_override = mat
+	_indicator.add_child(mesh)
+	add_child(_indicator)
+
+# ---------------------------------------------------------------- 開始時のコイン配置
+
+## 盤面に最初からコインを敷き詰めておく（メダルゲームのように山がある状態）。
+## グリッド状に置き、重なりによる物理の暴れを防ぐ。
+func _preplace_coins() -> void:
+	var cols := 7
+	var rows := 5
+	for cx in cols:
+		for cz in rows:
+			var x := lerpf(-2.4, 2.4, float(cx) / float(cols - 1))
+			var z := lerpf(-2.5, 0.7, float(cz) / float(rows - 1))
+			var coin := COIN_SCRIPT.create()
+			coin.position = Vector3(
+				x + randf_range(-0.08, 0.08),
+				0.25,
+				z + randf_range(-0.08, 0.08)
+			)
+			_dynamic_root.add_child(coin)
+
 # ---------------------------------------------------------------- 投下/出現
 
-## コインを1枚投下する。所持コインを1消費する。
+## コインを1枚、現在の狙い位置に投下する。所持コインを1消費する。
 func drop_coin() -> void:
 	if not GameManager.spend_coin(1):
 		return
 	var coin := COIN_SCRIPT.create()
-	coin.position = Vector3(randf_range(-2.2, 2.2), 4.5, -2.6)
+	coin.position = Vector3(_drop_x, DROP_Y, DROP_Z)
 	_dynamic_root.add_child(coin)
 
-func _start_item_spawner() -> void:
-	_item_timer = Timer.new()
-	_item_timer.wait_time = ITEM_SPAWN_INTERVAL
-	_item_timer.autostart = true
-	_item_timer.timeout.connect(_on_item_timer)
-	add_child(_item_timer)
+	_coins_dropped += 1
+	# コインを一定枚数入れるごとにアイテムを1個出す
+	if _coins_dropped % COINS_PER_ITEM == 0:
+		_spawn_item()
 
-func _on_item_timer() -> void:
+func _spawn_item() -> void:
 	if _count_items() >= MAX_ITEMS_ON_BOARD:
 		return
 	var data := ItemDatabase.random_item()
 	if data == null:
 		return
 	var item := ITEM_SCRIPT.create(data)
-	item.position = Vector3(randf_range(-2.0, 2.0), 4.5, -3.2)
+	item.position = Vector3(randf_range(-DROP_X_RANGE, DROP_X_RANGE), DROP_Y, DROP_Z)
 	_dynamic_root.add_child(item)
 
 func _count_items() -> int:

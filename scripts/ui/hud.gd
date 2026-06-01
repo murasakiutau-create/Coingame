@@ -78,7 +78,7 @@ func _build_drop_button() -> void:
 	wrap.add_child(drop)
 
 	var hint := Label.new()
-	hint.text = "（スペースキーでも投下）"
+	hint.text = "（マウスで狙う / ←→で移動 / クリック・スペースで投下）"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 14)
 	wrap.add_child(hint)
