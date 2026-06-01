@@ -9,7 +9,7 @@ const COIN_SCRIPT := preload("res://scripts/coin.gd")
 const ITEM_SCRIPT := preload("res://scripts/item.gd")
 
 # --- 盤面・ゲームのパラメータ（手触りはここを調整） ---
-const DROP_Z := 0.3            ## コインを落とすZ位置（板に押される手前側）
+const DROP_Z := -0.6           ## コインを落とすZ位置（奥の板の手前＝山の後ろに乗る）
 const DROP_Y := 4.0            ## コインを落とす高さ
 const DROP_X_RANGE := 2.5      ## 落下位置を左右に動かせる範囲
 const AIM_SPEED := 5.0         ## ←→キーで狙いを動かす速さ
@@ -94,15 +94,19 @@ func _build_stage() -> void:
 	_make_static_box(Vector3(0.5, 2, 5.2), Vector3(-3.25, 0.75, -1.4), Color(0.2, 0.22, 0.28))
 	_make_static_box(Vector3(0.5, 2, 5.2), Vector3(3.25, 0.75, -1.4), Color(0.2, 0.22, 0.28))
 
-	# プッシャー板（往復する幅広・薄い板）。奥のコインの山ごと手前へ押し出す。
+	# プッシャー（奥側を占める大きな板）。引き出しのように手前へスライドして、
+	# 手前にあるコインの山ごと押し出す。板の長さを十分とり、奥にコインが
+	# 取り残されない（板の後ろに回り込めない）ようにする。
+	var slab_len := 3.2                         # 奥行き方向の長さ（大きな板）
 	var pusher := AnimatableBody3D.new()
 	pusher.set_script(load("res://scripts/pusher.gd"))
-	pusher.position = Vector3(0, 0.3, -1.8)   # base_z はこの z から決まる
-	pusher.set("stroke", 1.4)
+	# ホーム位置：板の手前端がだいたい z=-1.5 あたりに来るよう、中心を奥へ置く
+	pusher.position = Vector3(0, 0.3, -4.0 + slab_len * 0.5)
+	pusher.set("stroke", 1.6)
 	pusher.set("speed", 1.2)
 	var pmesh := MeshInstance3D.new()
 	var pbox := BoxMesh.new()
-	pbox.size = Vector3(5.6, 0.6, 1.0)         # 幅広・薄い「板」
+	pbox.size = Vector3(5.6, 0.6, slab_len)     # 幅広・奥行きのある大きな板
 	pmesh.mesh = pbox
 	var pmat := StandardMaterial3D.new()
 	pmat.albedo_color = Color(0.85, 0.45, 0.3)
@@ -110,7 +114,7 @@ func _build_stage() -> void:
 	pusher.add_child(pmesh)
 	var pcol := CollisionShape3D.new()
 	var pshape := BoxShape3D.new()
-	pshape.size = Vector3(5.6, 0.6, 1.0)
+	pshape.size = Vector3(5.6, 0.6, slab_len)
 	pcol.shape = pshape
 	pusher.add_child(pcol)
 	add_child(pusher)
@@ -175,11 +179,12 @@ func _build_indicator() -> void:
 ## グリッド状に置き、重なりによる物理の暴れを防ぐ。
 func _preplace_coins() -> void:
 	var cols := 7
-	var rows := 5
+	var rows := 4
 	for cx in cols:
 		for cz in rows:
 			var x := lerpf(-2.4, 2.4, float(cx) / float(cols - 1))
-			var z := lerpf(-2.5, 0.7, float(cz) / float(rows - 1))
+			# 板の手前（z≈-0.7）から前端（z≈1.0）の範囲に敷く。板の奥には置かない。
+			var z := lerpf(-0.6, 1.0, float(cz) / float(rows - 1))
 			var coin := COIN_SCRIPT.create()
 			coin.position = Vector3(
 				x + randf_range(-0.08, 0.08),

@@ -30,6 +30,6 @@ static func create(radius: float = 0.35, height: float = 0.08) -> RigidBody3D:
 	shape.shape = cyl_shape
 	body.add_child(shape)
 
-	# コインは寝かせて置きたいので90度倒す
-	body.rotation_degrees = Vector3(90, 0, 0)
+	# コインは円盤の面を上下に向けて平らに寝かせる（メダルが床に伏せた状態）。
+	# CylinderMesh は既定で軸がY＝面が上下なので、回転は不要。
 	return body
